@@ -1,0 +1,92 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body{font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f9;}
+.card{background: #fff; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);}
+table{border-collapse: collapse; width: 100%;}
+th, td{padding: 10px; border: 1px solid #ddd; text-align: left;}
+th{background-color: #007bff; color: white;}
+pre{background: #f8f9fa; padding: 15px; border-radius: 5px;}
+</style>
+</head>
+<body>
+<h1>Machine Learning Model Report</h1>
+<div class='card'>
+<h2>Model Comparison</h2>
+<table border="1" class="dataframe table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Model</th>
+      <th>Accuracy</th>
+      <th>Precision</th>
+      <th>Recall</th>
+      <th>F1 Score</th>
+      <th>ROC-AUC</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Decision Tree</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>Random Forest</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>Gradient Boosting</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>XGBoost</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+      <td>1.000000</td>
+    </tr>
+    <tr>
+      <td>Logistic Regression</td>
+      <td>0.992063</td>
+      <td>0.992199</td>
+      <td>0.992063</td>
+      <td>0.992104</td>
+      <td>0.999447</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<div class='card'>
+<h2>Best Model: Decision Tree</h2>
+<h3>Classification Report</h3>
+<pre>              precision    recall  f1-score   support
+
+        High       1.00      1.00      1.00       136
+         Low       1.00      1.00      1.00       167
+      Medium       1.00      1.00      1.00       579
+
+    accuracy                           1.00       882
+   macro avg       1.00      1.00      1.00       882
+weighted avg       1.00      1.00      1.00       882
+</pre>
+<h3>Confusion Matrix</h3>
+<pre>[[136   0   0]
+ [  0 167   0]
+ [  0   0 579]]</pre>
+</div>
+</body>
+</html>

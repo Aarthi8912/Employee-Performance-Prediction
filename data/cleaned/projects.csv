@@ -1,0 +1,16 @@
+ProjectID,ProjectName,ProjectType,Budget,StartDate,EndDate,Status
+1,CRM Revamp,External,2772085.17,2023-02-11,2023-09-19,Completed
+2,AI Chatbot,Support,4736829.82,2023-12-26,2024-09-10,Active
+3,ERP Migration,External,4579307.46,2023-02-19,2023-09-22,On Hold
+4,Mobile App Launch,Development,4656338.93,2023-05-13,2023-12-30,Completed
+5,Data Lake Setup,External,3470720.83,2023-05-08,2023-11-03,Active
+6,Brand Refresh,Development,4766155.17,2023-11-07,2024-03-07,Active
+7,HR Portal,External,2109356.64,2023-09-21,2024-05-04,On Hold
+8,Cloud Migration,Internal,3992539.79,2023-06-14,2024-03-15,Completed
+9,Sales Analytics,Support,761231.08,2023-03-02,2023-07-23,Completed
+10,Compliance 2025,Internal,1310829.67,2023-11-07,2024-02-16,Active
+11,Product Redesign,Research,3449669.03,2023-08-07,2024-04-03,Completed
+12,Market Expansion,External,1936872.94,2023-11-06,2024-06-27,Completed
+13,Cybersecurity Audit,Internal,1854964.31,2023-12-22,2024-07-16,Active
+14,Talent Pipeline,Internal,1066821.75,2023-02-08,2023-07-06,Completed
+15,ESG Initiative,Support,1032346.08,2023-01-03,2023-08-31,Active
