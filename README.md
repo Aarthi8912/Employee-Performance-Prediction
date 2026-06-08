@@ -17,7 +17,6 @@
 
 <br/>
 
-![Dashboard Preview](https://via.placeholder.com/900x480/0a1628/00e5ff?text=PulseIQ+HR+Intelligence+Dashboard)
 
 </div>
 
@@ -39,7 +38,6 @@
 - [AI Recommendation Engine](#-ai-recommendation-engine)
 - [Export Options](#-export-options)
 - [Configuration](#-configuration)
-- [Screenshots](#-screenshots)
 - [Common Errors & Fixes](#-common-errors--fixes)
 - [Future Roadmap](#-future-roadmap)
 - [Author](#-author)
@@ -533,23 +531,6 @@ To **rename the platform** from PulseIQ to your own name, find and replace `Puls
 
 ---
 
-## 🖼 Screenshots
-
-> Replace the placeholders below with actual screenshots from your running dashboard.
-
-| Individual Profiler | Prediction Result |
-|---|---|
-| ![Form](https://via.placeholder.com/420x280/0a1628/00e5ff?text=Assessment+Form) | ![Result](https://via.placeholder.com/420x280/0a1628/22c55e?text=Prediction+Result) |
-
-| Bulk KPI Dashboard | Correlation Heatmap |
-|---|---|
-| ![KPIs](https://via.placeholder.com/420x280/0a1628/a855f7?text=Enterprise+KPIs) | ![Heatmap](https://via.placeholder.com/420x280/0a1628/f97316?text=Correlation+Matrix) |
-
-| Single Employee PDF | Bulk Enterprise PDF |
-|---|---|
-| ![PDF1](https://via.placeholder.com/420x280/ffffff/0a1628?text=Single+PDF+Report) | ![PDF2](https://via.placeholder.com/420x280/ffffff/0a1628?text=Bulk+PDF+Report) |
-
----
 
 ## 🐛 Common Errors & Fixes
 
