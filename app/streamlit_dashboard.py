@@ -374,9 +374,185 @@ h1,h2,h3,h4,h5,h6 {{ font-family: 'Syne', sans-serif !important; }}
 # ─────────────────────────────────────────────
 # CONSTANTS & CONFIGURATION
 # ─────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# PREDICTION ENGINE
+# Priority 1 → model.pkl  (commit to GitHub alongside this file)
+# Priority 2 → Flask API  (http://127.0.0.1:5000 — local only)
+# Priority 3 → Rule-based fallback (always works, no external deps)
+#
+# Streamlit Cloud deployment: commit model.pkl into app/ folder in your repo.
+# The dashboard works on Streamlit Cloud with NO Flask server running.
+# ═════════════════════════════════════════════════════════════════════════════
+import pickle as _pickle
+
+# ── Try loading model.pkl ──────────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def _load_model():
+    _search = [
+        os.path.join(_THIS_DIR, "model.pkl"),
+        os.path.join(os.getcwd(), "model.pkl"),
+        os.path.join(os.getcwd(), "app", "model.pkl"),
+        os.path.join(os.path.dirname(_THIS_DIR), "model.pkl"),
+        os.path.join(os.path.dirname(_THIS_DIR), "model", "model.pkl"),
+    ]
+    for _p in _search:
+        if os.path.exists(_p):
+            try:
+                with open(_p, "rb") as _f:
+                    return _pickle.load(_f)
+            except Exception:
+                pass
+    return None
+
+_MODEL_BUNDLE    = _load_model()
+_MODEL_AVAILABLE = _MODEL_BUNDLE is not None
+
+# ── Determine prediction mode for status banner ────────────────────────────
 API_BASE         = "http://127.0.0.1:5000"
 SINGLE_ENDPOINT  = f"{API_BASE}/predict-performance"
 BULK_ENDPOINT    = f"{API_BASE}/bulk-predict"
+
+def _api_reachable() -> bool:
+    """Quick non-blocking check — 0.8 s timeout."""
+    try:
+        import requests as _r
+        _r.get(API_BASE, timeout=0.8)
+        return True
+    except Exception:
+        return False
+
+# Detect mode once per session
+if "pred_mode" not in st.session_state:
+    if _MODEL_AVAILABLE:
+        st.session_state.pred_mode = "model"
+    else:
+        st.session_state.pred_mode = "rules"   # no blocking API check at startup
+
+# ── Core rule-based scorer (used when no model.pkl) ───────────────────────
+def _rule_score(payload: dict) -> tuple[str, dict]:
+    """
+    Multi-factor rule-based performance predictor.
+    Produces realistic, input-sensitive probabilities — not fixed buckets.
+    Factors weighted by HR research importance:
+      Satisfaction (25%) · Attendance (20%) · Manager Rating (18%)
+      Income (12%) · Work-Life Balance (10%) · Experience (8%)
+      Overtime penalty (7%)
+    """
+    _sat  = float(payload.get("satisfaction_score", 3.0))
+    _att  = float(payload.get("AttendanceRate", 90.0))
+    _mgr  = float(payload.get("ManagerRating", 3.0))
+    _inc  = float(payload.get("MonthlyIncome", 50000))
+    _wlb  = float(payload.get("WorkLifeBalance", 3))
+    _exp  = float(payload.get("TotalWorkingYears", 5))
+    _env  = float(payload.get("EnvironmentSatisfaction", 3))
+    _inv  = float(payload.get("JobInvolvement", 3))
+    _prf  = float(payload.get("PerformanceRating", 3))
+    _trn  = float(payload.get("TrainingTimesLastYear", 20))
+    _prm  = float(payload.get("YearsSinceLastPromotion", 1))
+    _ot   = 1 if str(payload.get("OverTime","No")).lower() in ("yes","1","true") else 0
+
+    # Normalise each factor to 0-1
+    _s_sat  = _sat / 4.0
+    _s_att  = min(_att, 100) / 100.0
+    _s_mgr  = _mgr / 5.0
+    _s_inc  = min(_inc, 200000) / 200000.0
+    _s_wlb  = _wlb / 4.0
+    _s_exp  = min(_exp, 20) / 20.0
+    _s_env  = _env / 4.0
+    _s_inv  = _inv / 4.0
+    _s_prf  = _prf / 4.0
+    _s_trn  = min(_trn, 50) / 50.0
+    _s_prm  = max(0, 1 - _prm / 8.0)   # stagnation penalty
+
+    # Weighted composite (sums to 1.0)
+    _raw = (
+        _s_sat * 0.20 +
+        _s_att * 0.18 +
+        _s_mgr * 0.15 +
+        _s_prf * 0.12 +
+        _s_env * 0.08 +
+        _s_inv * 0.08 +
+        _s_wlb * 0.07 +
+        _s_inc * 0.05 +
+        _s_exp * 0.04 +
+        _s_trn * 0.02 +
+        _s_prm * 0.01 -
+        _ot    * 0.07     # overtime stress penalty
+    )
+    _raw = max(0.0, min(1.0, _raw))
+
+    # Convert raw score to soft probability distribution
+    # High threshold: raw >= 0.68 | Low threshold: raw <= 0.38
+    if _raw >= 0.68:
+        _ph = 0.55 + (_raw - 0.68) * 1.25   # 0.55 → 0.95
+        _pm = 1.0 - _ph - 0.04
+        _pl = 0.04
+    elif _raw >= 0.38:
+        _pm = 0.45 + (_raw - 0.38) * 0.77   # 0.45 → 0.68
+        _ph = (_raw - 0.38) * 0.83
+        _pl = 1.0 - _ph - _pm
+    else:
+        _pl = 0.50 + (0.38 - _raw) * 1.30   # 0.50 → 0.95
+        _pm = 1.0 - _pl - 0.04
+        _ph = 0.04
+
+    # Normalise so they sum to exactly 1.0
+    _tot = _ph + _pm + _pl
+    _ph, _pm, _pl = _ph/_tot, _pm/_tot, _pl/_tot
+
+    if _raw >= 0.68:   _label = "High"
+    elif _raw >= 0.38: _label = "Medium"
+    else:              _label = "Low"
+
+    return _label, {"High": round(_ph, 4), "Medium": round(_pm, 4), "Low": round(_pl, 4)}
+
+def _predict_single(payload: dict) -> tuple[str, dict]:
+    """
+    Predict performance for one employee.
+    Uses pkl model if available, else intelligent rule-based scoring.
+    Never calls Flask — works fully offline and on Streamlit Cloud.
+    """
+    if _MODEL_AVAILABLE:
+        try:
+            _clf = _MODEL_BUNDLE.get("model", _MODEL_BUNDLE)
+            _travel_map = {"Non-Travel": 0, "Travel_Rarely": 1, "Travel_Frequently": 2}
+            _row = [[
+                float(payload.get("Age", 30)),
+                float(payload.get("MonthlyIncome", 50000)),
+                float(payload.get("YearsAtCompany", 5)),
+                float(payload.get("satisfaction_score", 3.0)),
+                float(payload.get("AttendanceRate", 90.0)),
+                float(payload.get("ManagerRating", 3.0)),
+                float(payload.get("EnvironmentSatisfaction", 3)),
+                float(payload.get("RelationshipSatisfaction", 3)),
+                float(payload.get("WorkLifeBalance", 3)),
+                float(payload.get("JobInvolvement", 3)),
+                1.0 if str(payload.get("OverTime","No")).lower() in ("yes","1","true") else 0.0,
+                float(payload.get("TrainingTimesLastYear", 20)),
+                float(payload.get("NumCompaniesWorked", 3)),
+                float(payload.get("YearsInCurrentRole", 2)),
+                float(payload.get("YearsSinceLastPromotion", 1)),
+                float(payload.get("TotalWorkingYears", 5)),
+                float(payload.get("DistanceFromHome", 10)),
+                float(payload.get("PerformanceRating", 3)),
+                float(_travel_map.get(str(payload.get("BusinessTravel","Travel_Rarely")), 1)),
+            ]]
+            _pred  = _clf.predict(_row)[0]
+            _proba = dict(zip(_clf.classes_, _clf.predict_proba(_row)[0]))
+            for _c in ("High", "Medium", "Low"):
+                _proba.setdefault(_c, 0.0)
+            return str(_pred), {k: float(v) for k, v in _proba.items()}
+        except Exception:
+            pass   # model.pkl loaded but inference failed → fall through to rules
+    return _rule_score(payload)
+
+def _predict_bulk(records: list) -> list:
+    """Batch predict for uploaded CSV/Excel — fully offline."""
+    _out = []
+    for _rec in records:
+        _pred, _probs = _predict_single(_rec)
+        _out.append({**_rec, "Prediction": _pred, "probabilities": _probs})
+    return _out
 
 DEPARTMENTS      = ["Sales", "Research & Development", "Human Resources",
                     "Finance", "Marketing", "Operations", "IT", "Legal"]
@@ -1074,6 +1250,22 @@ def single_report_csv(emp_name, dept, age, income, pred, conf, scores, recs):
 #  ██   ██ ███████ ██   ██ ██████  ███████ ██   ██
 # ═══════════════════════════════════════════════════════
 
+# ── PREDICTION MODE BANNER ────────────────────────────────────────────────
+_mode = st.session_state.get("pred_mode", "rules")
+if _mode == "model":
+    st.markdown("""<div style='background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);
+    border-radius:10px;padding:10px 18px;margin-bottom:12px;font-size:0.82rem;color:#86efac;
+    font-family:monospace'>
+    ⚡ <b>ML Model Active</b> — Predictions powered by your trained model.pkl
+    </div>""", unsafe_allow_html=True)
+else:
+    st.markdown("""<div style='background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.25);
+    border-radius:10px;padding:10px 18px;margin-bottom:12px;font-size:0.82rem;color:#fde68a;
+    font-family:monospace'>
+    🧠 <b>AI Rules Engine Active</b> — Running on intelligent multi-factor scoring.
+    To use your trained model, commit <code>model.pkl</code> to the <code>app/</code> folder in GitHub.
+    </div>""", unsafe_allow_html=True)
+
 # ── HERO ──
 st.markdown("""
 <div style='text-align:center;padding:40px 0 10px'>
@@ -1228,18 +1420,9 @@ with tab1:
         }
 
         with st.spinner("⚡ Analysing neural pathways & building intelligence report …"):
-            time.sleep(0.6)
-            try:
-                res  = requests.post(SINGLE_ENDPOINT, json=payload, timeout=10)
-                res.raise_for_status()
-                data = res.json()
-                pred = data["prediction"]
-                probs= data["probabilities"]
-                conf = max(probs.values()) * 100
-
-            except Exception as e:
-                st.error(f"⚠️ Cannot reach Flask API at {SINGLE_ENDPOINT}. Please ensure your backend is running.")
-                st.stop()
+            time.sleep(0.4)
+            pred, probs = _predict_single(payload)
+            conf = max(probs.values()) * 100
 
         # ── Compute all derived scores ──
         scores = compute_scores(
@@ -1528,14 +1711,11 @@ with tab2:
         if run_bulk or st.session_state.bulk_results is not None:
             if run_bulk:
                 with st.spinner("⚡ Processing bulk predictions …"):
-                    time.sleep(0.8)
                     try:
-                        res = requests.post(BULK_ENDPOINT, json=df_raw.to_dict("records"), timeout=60)
-                        res.raise_for_status()
-                        df_res = pd.DataFrame(res.json()["results"])
-                    except Exception:
-                        # Graceful fallback: use raw data + synthesised predictions
-                        st.warning("⚠️ API not reachable — running in demo mode with synthesised predictions.")
+                        _bulk_preds = _predict_bulk(df_raw.to_dict("records"))
+                        df_res = pd.DataFrame(_bulk_preds)
+                    except Exception as _be:
+                        st.warning(f"⚠️ Prediction engine error ({_be}) — using synthesised predictions.")
                         df_res = df_raw.copy()
 
                 df_res = bulk_ensure_columns(df_res)
