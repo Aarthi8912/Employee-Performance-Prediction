@@ -572,7 +572,7 @@ Final Year Student · Department of Information Technology / Data Science / AI
 
 <div align="center">
 
-**Built with ❤️ using Python · Flask · Streamlit · Plotly · ReportLab**
+**Built with using Python · Flask · Streamlit · Plotly · ReportLab**
 
 *PulseIQ — Because every employee deserves intelligent HR decisions.*
 
