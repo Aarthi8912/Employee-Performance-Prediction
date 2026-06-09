@@ -1181,77 +1181,194 @@ def bulk_ensure_columns(df):
     return df
 
 def bulk_kpis(df):
+    """
+    Compute top-line KPIs safely for pandas 2.x with Arrow string dtype.
+    Uses pd.to_numeric() before .mean() to avoid TypeError on string columns.
+    """
+    def _snum(col):
+        try:
+            return float(pd.to_numeric(df[col], errors="coerce").mean())
+        except Exception:
+            return 0.0
+
     n    = len(df)
-    high = (df["Prediction"]=="High").sum()
-    med  = (df["Prediction"]=="Medium").sum()
-    low  = (df["Prediction"]=="Low").sum()
-    pr   = (df["PromotionReadiness"] >= 70).sum()
-    ar   = (df["AttritionRisk"]      >= 70).sum()
-    avg_sal  = df["MonthlyIncome"].mean()
-    avg_sat  = df["SatisfactionScore"].mean()
-    avg_att  = df["AttendanceRate"].mean()
-    avg_exp  = df["YearsAtCompany"].mean()
+    # Prediction comparison: cast bool to int before sum to avoid Arrow issues
+    high = int((df["Prediction"] == "High").astype(int).sum())
+    med  = int((df["Prediction"] == "Medium").astype(int).sum())
+    low  = int((df["Prediction"] == "Low").astype(int).sum())
+    pr   = int((pd.to_numeric(df["PromotionReadiness"], errors="coerce") >= 70).sum())
+    ar   = int((pd.to_numeric(df["AttritionRisk"],      errors="coerce") >= 70).sum())
+    avg_sal  = _snum("MonthlyIncome")
+    avg_sat  = _snum("SatisfactionScore")
+    avg_att  = _snum("AttendanceRate")
+    avg_exp  = _snum("YearsAtCompany")
     return n, high, med, low, pr, ar, avg_sal, avg_sat, avg_att, avg_exp
 
 def bulk_generate_insights(df):
+    """
+    Generate AI workforce insights from bulk prediction results.
+    Fully compatible with pandas 2.x Arrow-backed string dtypes —
+    uses (col == value).astype(int).mean() instead of .apply(lambda).mean()
+    which raises TypeError on string Series in newer pandas.
+    All computations wrapped in try/except so one bad column never
+    kills the entire insights section.
+    """
     insights = []
-    # Performance insights
-    top_dept = df.groupby("Department")["Prediction"].apply(lambda x: (x=="High").sum()/len(x)*100)
-    if not top_dept.empty:
-        best = top_dept.idxmax()
-        worst = top_dept.idxmin()
-        insights.append(f"🏆 **{best}** has the highest proportion of High performers ({top_dept[best]:.0f}%), making it the top-performing department.")
-        insights.append(f"⚠️ **{worst}** has the lowest High performer ratio ({top_dept[worst]:.0f}%). Targeted L&D investment recommended.")
 
-    # Attrition insights
-    high_risk_dept = df[df["AttritionRisk"]>=70].groupby("Department").size()
-    if not high_risk_dept.empty:
-        risk_dept = high_risk_dept.idxmax()
-        insights.append(f"🚨 **{risk_dept}** has the highest concentration of high-attrition-risk employees ({high_risk_dept[risk_dept]} individuals). Retention strategy urgently required.")
+    # ── Helper: safe pct of High performers in a sub-DataFrame ──────────
+    def _high_pct(sub):
+        """Returns % of 'High' in sub['Prediction']. Safe for Arrow strings."""
+        if sub.empty:
+            return 0.0
+        return float((sub["Prediction"] == "High").astype(int).mean() * 100)
 
-    # Attendance-performance link
-    low_att  = df[df["AttendanceRate"]<85]["Prediction"].apply(lambda x: x=="High").mean()*100
-    high_att = df[df["AttendanceRate"]>=95]["Prediction"].apply(lambda x: x=="High").mean()*100
-    insights.append(f"📊 Employees with attendance below 85% are **{max(0, high_att-low_att):.0f}pp** less likely to be High performers vs. those with ≥95% attendance.")
+    def _safe_mean(series):
+        """Mean that works even if series is empty or all-NaN."""
+        try:
+            v = pd.to_numeric(series, errors="coerce").mean()
+            return float(v) if pd.notna(v) else 0.0
+        except Exception:
+            return 0.0
 
-    # Satisfaction-performance link
-    high_sat = df[df["SatisfactionScore"]>=3]["OverallScore"].mean()
-    low_sat  = df[df["SatisfactionScore"]<2]["OverallScore"].mean()
-    insights.append(f"😊 Highly satisfied employees score {high_sat:.0f}/100 on average vs. {low_sat:.0f}/100 for low-satisfaction employees — a **{high_sat-low_sat:.0f}-point gap**.")
+    # ── 1. Department performance ────────────────────────────────────────
+    try:
+        try:
+            top_dept = (
+                df.groupby("Department")
+                  .apply(lambda g: float((g["Prediction"] == "High").astype(int).mean() * 100),
+                         include_groups=False)
+            )
+        except TypeError:
+            # pandas < 2.2 does not support include_groups
+            top_dept = (
+                df.groupby("Department")
+                  .apply(lambda g: float((g["Prediction"] == "High").astype(int).mean() * 100))
+            )
+        if not top_dept.empty:
+            best  = top_dept.idxmax()
+            worst = top_dept.idxmin()
+            insights.append(
+                f"🏆 **{best}** has the highest proportion of High performers "
+                f"({top_dept[best]:.0f}%), making it the top-performing department.")
+            insights.append(
+                f"⚠️ **{worst}** has the lowest High performer ratio "
+                f"({top_dept[worst]:.0f}%). Targeted L&D investment recommended.")
+    except Exception:
+        pass
 
-    # Gender distribution
-    if len(df["Gender"].unique()) > 1:
-        g_counts = df["Gender"].value_counts()
-        insights.append(f"👥 Workforce composition: {' · '.join([f'{k}: {v} ({v/len(df)*100:.0f}%)' for k,v in g_counts.items()])}.")
+    # ── 2. Attrition by department ───────────────────────────────────────
+    try:
+        high_risk_dept = df[df["AttritionRisk"] >= 70].groupby("Department").size()
+        if not high_risk_dept.empty:
+            risk_dept = high_risk_dept.idxmax()
+            insights.append(
+                f"🚨 **{risk_dept}** has the highest concentration of high-attrition-risk "
+                f"employees ({high_risk_dept[risk_dept]} individuals). "
+                f"Retention strategy urgently required.")
+    except Exception:
+        pass
 
-    # Promotion readiness
-    pr_pct = (df["PromotionReadiness"]>=70).sum() / len(df) * 100
-    insights.append(f"🚀 **{pr_pct:.0f}%** of employees meet the promotion-readiness threshold (≥70/100). Review succession pipeline capacity.")
+    # ── 3. Attendance-performance link ───────────────────────────────────
+    try:
+        low_att  = _high_pct(df[df["AttendanceRate"] <  85])
+        high_att = _high_pct(df[df["AttendanceRate"] >= 95])
+        gap = max(0, high_att - low_att)
+        insights.append(
+            f"📊 Employees with attendance ≥95% are **{gap:.0f}pp** more likely "
+            f"to be High performers than those below 85% attendance.")
+    except Exception:
+        pass
 
-    # Income vs performance
-    avg_hi = df[df["Prediction"]=="High"]["MonthlyIncome"].mean()
-    avg_lo = df[df["Prediction"]=="Low"]["MonthlyIncome"].mean()
-    insights.append(f"💰 High performers earn ${avg_hi:,.0f}/mo on average vs. ${avg_lo:,.0f}/mo for Low performers — a **${avg_hi-avg_lo:,.0f} gap**.")
+    # ── 4. Satisfaction-performance link ────────────────────────────────
+    try:
+        high_sat_score = _safe_mean(df[df["SatisfactionScore"] >= 3]["OverallScore"])
+        low_sat_score  = _safe_mean(df[df["SatisfactionScore"] <  2]["OverallScore"])
+        gap = high_sat_score - low_sat_score
+        insights.append(
+            f"😊 Highly satisfied employees score **{high_sat_score:.0f}/100** on average "
+            f"vs. **{low_sat_score:.0f}/100** for low-satisfaction — "
+            f"a **{gap:.0f}-point gap**.")
+    except Exception:
+        pass
 
-    # Experience
-    exp_hi = df[df["YearsAtCompany"]>=5]["Prediction"].apply(lambda x: x=="High").mean()*100
-    exp_lo = df[df["YearsAtCompany"]<2]["Prediction"].apply(lambda x: x=="High").mean()*100
-    insights.append(f"📅 Employees with ≥5 years tenure are **{exp_hi:.0f}%** likely to be High performers vs. **{exp_lo:.0f}%** for those with <2 years.")
+    # ── 5. Gender distribution ───────────────────────────────────────────
+    try:
+        if df["Gender"].nunique() > 1:
+            g_counts = df["Gender"].value_counts()
+            comp = " · ".join(
+                [f"{k}: {v} ({v/len(df)*100:.0f}%)" for k, v in g_counts.items()])
+            insights.append(f"👥 Workforce composition: {comp}.")
+    except Exception:
+        pass
 
-    # Attrition summary
-    total_risk = (df["AttritionRisk"]>=70).sum()
-    insights.append(f"⚡ **{total_risk} employees** ({total_risk/len(df)*100:.0f}% of workforce) are at critical attrition risk. Estimated replacement cost: ${total_risk*45000:,} (industry average).")
+    # ── 6. Promotion readiness ───────────────────────────────────────────
+    try:
+        pr_pct = (df["PromotionReadiness"] >= 70).sum() / len(df) * 100
+        insights.append(
+            f"🚀 **{pr_pct:.0f}%** of employees meet the promotion-readiness "
+            f"threshold (≥70/100). Review succession pipeline capacity.")
+    except Exception:
+        pass
 
-    # Age insight
-    avg_age_hi = df[df["Prediction"]=="High"]["Age"].mean()
-    avg_age_lo = df[df["Prediction"]=="Low"]["Age"].mean()
-    insights.append(f"🎂 High performers average **{avg_age_hi:.0f} years old** vs. **{avg_age_lo:.0f}** for Low performers — experience level matters.")
+    # ── 7. Income vs performance ─────────────────────────────────────────
+    try:
+        avg_hi = _safe_mean(df[df["Prediction"] == "High"]["MonthlyIncome"])
+        avg_lo = _safe_mean(df[df["Prediction"] == "Low"]["MonthlyIncome"])
+        if avg_hi > 0 and avg_lo > 0:
+            insights.append(
+                f"💰 High performers earn **${avg_hi:,.0f}/mo** on average vs. "
+                f"**${avg_lo:,.0f}/mo** for Low performers — "
+                f"a **${avg_hi - avg_lo:,.0f} gap**.")
+    except Exception:
+        pass
 
-    # Top performer
-    top = df.nlargest(1, "OverallScore")
-    if not top.empty:
-        insights.append(f"⭐ Top performer: **{top['EmployeeName'].values[0]}** ({top['Department'].values[0]}) with an Overall Score of **{top['OverallScore'].values[0]:.0f}/100**.")
+    # ── 8. Experience vs performance ─────────────────────────────────────
+    try:
+        exp_hi = _high_pct(df[df["YearsAtCompany"] >= 5])
+        exp_lo = _high_pct(df[df["YearsAtCompany"] <  2])
+        insights.append(
+            f"📅 Employees with ≥5 years tenure are **{exp_hi:.0f}%** likely to be "
+            f"High performers vs. **{exp_lo:.0f}%** for those with <2 years.")
+    except Exception:
+        pass
 
+    # ── 9. Critical attrition headcount ──────────────────────────────────
+    try:
+        total_risk = int((df["AttritionRisk"] >= 70).sum())
+        cost       = total_risk * 45000
+        insights.append(
+            f"⚡ **{total_risk} employees** ({total_risk/len(df)*100:.0f}% of workforce) "
+            f"are at critical attrition risk. "
+            f"Estimated replacement cost: **${cost:,}** (industry average).")
+    except Exception:
+        pass
+
+    # ── 10. Age vs performance ───────────────────────────────────────────
+    try:
+        avg_age_hi = _safe_mean(df[df["Prediction"] == "High"]["Age"])
+        avg_age_lo = _safe_mean(df[df["Prediction"] == "Low"]["Age"])
+        if avg_age_hi > 0 and avg_age_lo > 0:
+            insights.append(
+                f"🎂 High performers average **{avg_age_hi:.0f} years old** vs. "
+                f"**{avg_age_lo:.0f}** for Low performers — experience level matters.")
+    except Exception:
+        pass
+
+    # ── 11. Top performer spotlight ──────────────────────────────────────
+    try:
+        top = df.nlargest(1, "OverallScore")
+        if not top.empty:
+            insights.append(
+                f"⭐ Top performer: **{top['EmployeeName'].values[0]}** "
+                f"({top['Department'].values[0]}) with an Overall Score of "
+                f"**{top['OverallScore'].values[0]:.0f}/100**.")
+    except Exception:
+        pass
+
+    # Fallback if nothing generated
+    if not insights:
+        insights.append("📊 Insights could not be generated — ensure the dataset "
+                        "includes Prediction, Department, AttendanceRate and OverallScore columns.")
     return insights
 
 def bulk_recommendations_by_dept(df):
