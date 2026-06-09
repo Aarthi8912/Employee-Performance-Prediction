@@ -375,58 +375,81 @@ h1,h2,h3,h4,h5,h6 {{ font-family: 'Syne', sans-serif !important; }}
 # CONSTANTS & CONFIGURATION
 # ─────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
-# PREDICTION ENGINE
-# Priority 1 → model.pkl  (commit to GitHub alongside this file)
-# Priority 2 → Flask API  (http://127.0.0.1:5000 — local only)
-# Priority 3 → Rule-based fallback (always works, no external deps)
+# PREDICTION ENGINE  —  Fully self-contained, zero Flask dependency
+# ─────────────────────────────────────────────────────────────────────────────
+# How it works (priority order):
+#   1. Loads your trained pipeline from models/ folder:
+#      best_model.pkl · imputer.pkl · scaler.pkl ·
+#      label_encoder.pkl · feature_columns.pkl
+#      (same files your Flask API uses — just commit them to GitHub)
+#   2. Falls back to intelligent multi-factor rule engine if files missing
 #
-# Streamlit Cloud deployment: commit model.pkl into app/ folder in your repo.
-# The dashboard works on Streamlit Cloud with NO Flask server running.
+# NO Flask server needed. Works 100% on Streamlit Cloud.
+# To activate your real model: commit the 5 .pkl files from your models/
+# folder into the repo under  models/  or  app/models/
 # ═════════════════════════════════════════════════════════════════════════════
 import pickle as _pickle
+import joblib as _joblib
 
-# ── Try loading model.pkl ──────────────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def _load_model():
-    _search = [
-        os.path.join(_THIS_DIR, "model.pkl"),
-        os.path.join(os.getcwd(), "model.pkl"),
-        os.path.join(os.getcwd(), "app", "model.pkl"),
-        os.path.join(os.path.dirname(_THIS_DIR), "model.pkl"),
-        os.path.join(os.path.dirname(_THIS_DIR), "model", "model.pkl"),
+# ── Locate the models directory ───────────────────────────────────────────
+def _find_file(filename: str) -> str | None:
+    """Search common locations for a pkl file. Returns path or None."""
+    _candidates = [
+        os.path.join(_THIS_DIR, filename),
+        os.path.join(_THIS_DIR, "models", filename),
+        os.path.join(os.path.dirname(_THIS_DIR), "models", filename),
+        os.path.join(os.path.dirname(_THIS_DIR), filename),
+        os.path.join(os.getcwd(), "models", filename),
+        os.path.join(os.getcwd(), filename),
     ]
-    for _p in _search:
+    for _p in _candidates:
         if os.path.exists(_p):
-            try:
-                with open(_p, "rb") as _f:
-                    return _pickle.load(_f)
-            except Exception:
-                pass
+            return _p
     return None
 
-_MODEL_BUNDLE    = _load_model()
-_MODEL_AVAILABLE = _MODEL_BUNDLE is not None
+def _load_artifact(filename: str):
+    """Load a joblib/pickle artifact. Returns None silently if not found."""
+    _p = _find_file(filename)
+    if _p is None:
+        return None
+    try:
+        return _joblib.load(_p)
+    except Exception:
+        try:
+            with open(_p, "rb") as _f:
+                return _pickle.load(_f)
+        except Exception:
+            return None
 
-# ── Determine prediction mode for status banner ────────────────────────────
+@st.cache_resource(show_spinner=False)
+def _load_pipeline():
+    """
+    Load the exact pipeline your Flask API uses:
+      best_model.pkl, imputer.pkl, scaler.pkl,
+      label_encoder.pkl, feature_columns.pkl
+    Returns dict with all artifacts, or None if any are missing.
+    """
+    _model   = _load_artifact("best_model.pkl")
+    _imp     = _load_artifact("imputer.pkl")
+    _scaler  = _load_artifact("scaler.pkl")
+    _le      = _load_artifact("label_encoder.pkl")
+    _fcols   = _load_artifact("feature_columns.pkl")
+    if _model is not None and _le is not None and _fcols is not None:
+        return {"model": _model, "imputer": _imp,
+                "scaler": _scaler, "le": _le, "feature_cols": _fcols}
+    return None
+
+_PIPELINE        = _load_pipeline()
+_MODEL_AVAILABLE = _PIPELINE is not None
+
+# Keep API constants for reference (never called)
 API_BASE         = "http://127.0.0.1:5000"
 SINGLE_ENDPOINT  = f"{API_BASE}/predict-performance"
 BULK_ENDPOINT    = f"{API_BASE}/bulk-predict"
 
-def _api_reachable() -> bool:
-    """Quick non-blocking check — 0.8 s timeout."""
-    try:
-        import requests as _r
-        _r.get(API_BASE, timeout=0.8)
-        return True
-    except Exception:
-        return False
-
 # Detect mode once per session
 if "pred_mode" not in st.session_state:
-    if _MODEL_AVAILABLE:
-        st.session_state.pred_mode = "model"
-    else:
-        st.session_state.pred_mode = "rules"   # no blocking API check at startup
+    st.session_state.pred_mode = "model" if _MODEL_AVAILABLE else "rules"
 
 # ── Core rule-based scorer (used when no model.pkl) ───────────────────────
 def _rule_score(payload: dict) -> tuple[str, dict]:
@@ -509,49 +532,113 @@ def _rule_score(payload: dict) -> tuple[str, dict]:
 def _predict_single(payload: dict) -> tuple[str, dict]:
     """
     Predict performance for one employee.
-    Uses pkl model if available, else intelligent rule-based scoring.
-    Never calls Flask — works fully offline and on Streamlit Cloud.
+    Replicates the exact preprocessing pipeline from flask_api.py:
+      pd.get_dummies → align feature_columns → imputer → scaler → model.predict
+    Falls back to rule-based scoring if pipeline files are not found.
+    Never calls Flask. Works fully on Streamlit Cloud.
     """
     if _MODEL_AVAILABLE:
         try:
-            _clf = _MODEL_BUNDLE.get("model", _MODEL_BUNDLE)
-            _travel_map = {"Non-Travel": 0, "Travel_Rarely": 1, "Travel_Frequently": 2}
-            _row = [[
-                float(payload.get("Age", 30)),
-                float(payload.get("MonthlyIncome", 50000)),
-                float(payload.get("YearsAtCompany", 5)),
-                float(payload.get("satisfaction_score", 3.0)),
-                float(payload.get("AttendanceRate", 90.0)),
-                float(payload.get("ManagerRating", 3.0)),
-                float(payload.get("EnvironmentSatisfaction", 3)),
-                float(payload.get("RelationshipSatisfaction", 3)),
-                float(payload.get("WorkLifeBalance", 3)),
-                float(payload.get("JobInvolvement", 3)),
-                1.0 if str(payload.get("OverTime","No")).lower() in ("yes","1","true") else 0.0,
-                float(payload.get("TrainingTimesLastYear", 20)),
-                float(payload.get("NumCompaniesWorked", 3)),
-                float(payload.get("YearsInCurrentRole", 2)),
-                float(payload.get("YearsSinceLastPromotion", 1)),
-                float(payload.get("TotalWorkingYears", 5)),
-                float(payload.get("DistanceFromHome", 10)),
-                float(payload.get("PerformanceRating", 3)),
-                float(_travel_map.get(str(payload.get("BusinessTravel","Travel_Rarely")), 1)),
-            ]]
-            _pred  = _clf.predict(_row)[0]
-            _proba = dict(zip(_clf.classes_, _clf.predict_proba(_row)[0]))
+            import pandas as _pd
+            import numpy as _np
+            _p  = _PIPELINE
+            _df = _pd.DataFrame([payload])
+
+            # Step 1 — one-hot encode categoricals (matches flask_api.py)
+            _cat_cols = _df.select_dtypes(include=["object","category"]).columns.tolist()
+            _df_enc   = _pd.get_dummies(_df, columns=_cat_cols)
+
+            # Step 2 — align to training feature columns (add missing cols as 0)
+            _fcols = _p["feature_cols"]
+            for _c in _fcols:
+                if _c not in _df_enc.columns:
+                    _df_enc[_c] = 0
+            _df_enc = _df_enc[_fcols]
+
+            # Step 3 — impute + scale numeric columns
+            if _p["imputer"] is not None and _p["scaler"] is not None:
+                try:
+                    _num_cols = _p["scaler"].feature_names_in_
+                    _df_enc[_num_cols] = _p["imputer"].transform(_df_enc[_num_cols])
+                    _df_enc[_num_cols] = _p["scaler"].transform(_df_enc[_num_cols])
+                except Exception:
+                    pass   # feature_names_in_ unavailable in older sklearn — skip scaling
+
+            # Step 4 — predict
+            _raw_pred = _p["model"].predict(_df_enc)
+            _raw_prob = _p["model"].predict_proba(_df_enc)
+            _label    = _p["le"].inverse_transform(_raw_pred)[0]
+            _classes  = _p["le"].classes_
+            _proba    = {str(cls): float(pr) for cls, pr in zip(_classes, _raw_prob[0])}
+            # Ensure High / Medium / Low always present
             for _c in ("High", "Medium", "Low"):
                 _proba.setdefault(_c, 0.0)
-            return str(_pred), {k: float(v) for k, v in _proba.items()}
+            return str(_label), _proba
+
         except Exception:
-            pass   # model.pkl loaded but inference failed → fall through to rules
+            pass   # pipeline failed → fall through to rules engine
+    # ── Rule-based fallback ──────────────────────────────────────────────
     return _rule_score(payload)
 
+def _preprocess_bulk(records: list) -> "pd.DataFrame | None":
+    """
+    Preprocess a list of employee dicts through the full pipeline
+    (matches flask_api.py bulk_predict preprocessing).
+    Returns encoded DataFrame ready for model.predict, or None on failure.
+    """
+    if not _MODEL_AVAILABLE:
+        return None
+    try:
+        import pandas as _pd
+        _p   = _PIPELINE
+        _df  = _pd.DataFrame(records)
+        _cat = _df.select_dtypes(include=["object","category"]).columns.tolist()
+        _enc = _pd.get_dummies(_df, columns=_cat)
+        for _c in _p["feature_cols"]:
+            if _c not in _enc.columns:
+                _enc[_c] = 0
+        _enc = _enc[_p["feature_cols"]]
+        if _p["imputer"] is not None and _p["scaler"] is not None:
+            try:
+                _nc = _p["scaler"].feature_names_in_
+                _enc[_nc] = _p["imputer"].transform(_enc[_nc])
+                _enc[_nc] = _p["scaler"].transform(_enc[_nc])
+            except Exception:
+                pass
+        return _enc
+    except Exception:
+        return None
+
 def _predict_bulk(records: list) -> list:
-    """Batch predict for uploaded CSV/Excel — fully offline."""
+    """
+    Batch predict — uses vectorised pipeline when available (fast),
+    falls back to per-row rule scoring. Fully offline, no Flask.
+    """
+    if _MODEL_AVAILABLE:
+        try:
+            import pandas as _pd
+            _p    = _PIPELINE
+            _enc  = _preprocess_bulk(records)
+            if _enc is not None:
+                _preds = _p["model"].predict(_enc)
+                _probs = _p["model"].predict_proba(_enc)
+                _labels = _p["le"].inverse_transform(_preds)
+                _classes = _p["le"].classes_
+                _out = []
+                for i, rec in enumerate(records):
+                    _proba = {str(c): float(_probs[i][j]) for j, c in enumerate(_classes)}
+                    for _c in ("High", "Medium", "Low"):
+                        _proba.setdefault(_c, 0.0)
+                    _out.append({**rec, "Prediction": str(_labels[i]),
+                                 "probabilities": _proba})
+                return _out
+        except Exception:
+            pass   # pipeline failed → fall through to per-row rules
+    # Per-row rule fallback
     _out = []
     for _rec in records:
-        _pred, _probs = _predict_single(_rec)
-        _out.append({**_rec, "Prediction": _pred, "probabilities": _probs})
+        _pred, _proba = _rule_score(_rec)
+        _out.append({**_rec, "Prediction": _pred, "probabilities": _proba})
     return _out
 
 DEPARTMENTS      = ["Sales", "Research & Development", "Human Resources",
