@@ -1,37 +1,16 @@
 # ─────────────────────────────────────────────────────────────────
 # PulseIQ — HR Intelligence Platform
-# requirements.txt
-#
-# ✅ Compatible with Python 3.14 (Streamlit Cloud default as of 2025)
-# ✅ All packages below have pre-built wheels for cp314 — no source
-#    compilation required, so no zlib / meson / Cython build errors.
-#
-# DO NOT pin to pandas==2.1.4 or matplotlib==3.8.x — those versions
-# have no cp314 wheels and will fail to build on Streamlit Cloud.
+# requirements.txt — Python 3.14 compatible (Streamlit Cloud)
 # ─────────────────────────────────────────────────────────────────
 
-# ── Core dashboard ───────────────────────────────────────────────
 streamlit>=1.35.0
-
-# ── Data & ML ────────────────────────────────────────────────────
-pandas>=2.2.3          # first release with cp314 wheels
-numpy>=2.0.0           # cp314 wheels available
-scikit-learn>=1.5.0    # cp314 wheels available
-
-# ── Visualisation ────────────────────────────────────────────────
+pandas>=2.2.3
+numpy>=2.0.0
+scikit-learn>=1.5.0
+joblib>=1.4.0
 plotly>=5.22.0
-matplotlib>=3.9.0      # first release with cp314 wheels
-
-# ── PDF engine ───────────────────────────────────────────────────
-reportlab>=4.2.0       # pure Python — no build issues
-pillow>=11.0.0         # cp314 wheels available from 11.x onward
-
-# ── Excel export ─────────────────────────────────────────────────
-openpyxl>=3.1.0        # pure Python — no build issues
-
-# ── HTTP (Flask API calls) ───────────────────────────────────────
+matplotlib>=3.9.0
+reportlab>=4.2.0
+pillow>=11.0.0
+openpyxl>=3.1.0
 requests>=2.31.0
-
-# ── Flask backend (only needed if running model/app.py locally) ──
-# flask>=3.0.0
-# joblib>=1.3.0
